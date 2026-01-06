@@ -1,9 +1,9 @@
 class Student:
-    def __init__(self, stu_id, stu_name, year, sub):
+    def __init__(self, stu_id, stu_name, year, subject):
         self.stu_id = stu_id
         self.name = stu_name
         self.year = year
-        self.sub = sub
+        self.subject = subject
 
 class Classroom:
     def __init__(self, room_id, benches):
