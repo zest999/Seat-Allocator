@@ -1,7 +1,7 @@
 class Student:
     def __init__(self, stu_id, stu_name, year, subject):
         self.stu_id = stu_id
-        self.name = stu_name
+        self.stu_name = stu_name
         self.year = year
         self.subject = subject
 

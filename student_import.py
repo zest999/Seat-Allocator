@@ -1,9 +1,10 @@
 import pandas as pd
 from models import Student
 
-students = []
 
 def student_import_excel(file_path):
+
+    students = []
     df = pd.read_excel(file_path)
 
     for _, row in df.iterrows():
@@ -18,10 +19,10 @@ def student_import_excel(file_path):
 
     return students
 
-def review_students ():
+def review_students (students):
     print("\n Student List")
     for s in students:
-        print(f"{Student.id}:{Student.stu_name}, Year:{Student.year}, Subject:{Student.subject}")
+        print(f"{s.stu_id}:{s.stu_name}, Year:{s.year}, Subject:{s.subject}")
 
     choice = input("\nDo you want to edit any student? (y/n): ")
 
@@ -29,7 +30,7 @@ def review_students ():
         sid = int(input("Enter student ID to edit: "))
         for s in students:
             if s.stu_id == sid:
-                s.name = input(f"Name ({s.name}): ") or s.name
+                s.name = input(f"Name ({s.stu_name}): ") or s.name
                 s.year = int(input(f"Year ({s.year}): ") or s.year)
                 s.subject = input(f"Subject ({s.subject}): ") or s.subject
 
