@@ -33,6 +33,10 @@ def review_students (students):
                 s.name = input(f"Name ({s.stu_name}): ") or s.name
                 s.year = int(input(f"Year ({s.year}): ") or s.year)
                 s.subject = input(f"Subject ({s.subject}): ") or s.subject
+    else:
+        return students
+    
+
 
     return students
 

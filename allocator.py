@@ -13,5 +13,4 @@ def allocate_students(students, classroom):
         })
 
         index += 1
-
     return allocation

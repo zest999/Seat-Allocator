@@ -2,7 +2,7 @@ from models import Bench
 
 def generate_layout(column_bench_map):
     benches = []
- 
+
     for column, count in column_bench_map.items():
         for row in range(1, count + 1):
             benches.append(
@@ -14,3 +14,4 @@ def generate_layout(column_bench_map):
             )
 
     return benches
+
