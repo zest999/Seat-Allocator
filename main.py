@@ -7,7 +7,6 @@ from models import Classroom
 students = student_import_excel("students.xlsx")
 students = review_students(students)
 
-
 layout_template = {
     1: 4,  
     2: 2,   
