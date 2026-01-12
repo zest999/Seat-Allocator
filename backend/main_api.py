@@ -83,7 +83,7 @@ def import_students_from_excel(db: Session = Depends(get_db)):
     db.commit()
 
     return {
-        "message": "Student import completed ✅",
+        "message": "Student import completed !",
         "inserted": inserted,
         "skipped_duplicates": skipped
     }
@@ -136,7 +136,7 @@ def create_classroom(
     db.commit()
 
     return {
-        "message": "Classroom created ✅",
+        "message": "Classroom created !",
         "room_id": room_id,
         "seats_per_bench": seats_per_bench,
         "benches_created": len(benches)
@@ -245,7 +245,7 @@ def allocate_students_to_room(req: AllocateRequest, db: Session = Depends(get_db
     db.commit()
 
     return {
-        "message": "Allocation completed ✅",
+        "message": "Allocation completed !",
         "room_id": room_id,
         "allocated": allocated,
         "waiting": waiting
