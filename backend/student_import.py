@@ -30,7 +30,7 @@ def review_students (students):
         sid = int(input("Enter student ID to edit: "))
         for s in students:
             if s.stu_id == sid:
-                s.name = input(f"Name ({s.stu_name}): ") or s.name
+                s.stu_name = input(f"Name ({s.stu_name}): ") or s.stu_name
                 s.year = int(input(f"Year ({s.year}): ") or s.year)
                 s.subject = input(f"Subject ({s.subject}): ") or s.subject
     else:
