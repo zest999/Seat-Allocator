@@ -1,7 +1,7 @@
-from fastapi import FastAPI, Depends, Body, HTTPException
+from fastapi import FastAPI, Depends, Body, HTTPException, Query
 from sqlalchemy.orm import Session
 from database import Base, engine, SessionLocal
-from db_models import StudentDB, ClassroomDB, BenchDB, AllocationDB
+from db_models import StudentDB, ClassroomDB, BenchDB, AllocationDB, ExamDB, ExamRegistrationDB
 import pandas as pd
 import json
 from math import ceil
@@ -11,12 +11,21 @@ from fastapi.responses import FileResponse
 from pathlib import Path
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
+from fastapi.middleware.cors import CORSMiddleware
 
 
 
 app = FastAPI(title = "Seat Allocator API")
 
 Base.metadata.create_all(bind = engine)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 def get_db():
     db = SessionLocal()
@@ -88,6 +97,10 @@ def import_students_from_excel(db: Session = Depends(get_db)):
         "skipped_duplicates": skipped
     }
 
+class ClassroomCreateRequest(BaseModel):
+    room_id: str
+    seats_per_bench: int
+    layout: dict
 
 @app.post("/classrooms/create")
 def create_classroom(
@@ -203,6 +216,7 @@ def capacity_check(room_id: str, db: Session = Depends(get_db)):
 
 
 class AllocateRequest(BaseModel):
+    exam_id: int
     room_id: str
 
 @app.post("/allocate")
@@ -213,7 +227,16 @@ def allocate_students_to_room(req: AllocateRequest, db: Session = Depends(get_db
     if not classroom:
         return {"error": "Classroom not found"}
 
-    students = db.query(StudentDB).order_by(StudentDB.stu_id).all()
+    seats_per_bench = classroom.seats_per_bench  # 2 or 3
+
+    students = (
+    db.query(StudentDB)
+    .join(ExamRegistrationDB, ExamRegistrationDB.student_id == StudentDB.id)
+    .filter(ExamRegistrationDB.exam_id == req.exam_id)
+    .order_by(StudentDB.stu_id)
+    .all()
+    )
+
     benches = (
         db.query(BenchDB)
         .filter(BenchDB.classroom_id == classroom.id)
@@ -221,22 +244,35 @@ def allocate_students_to_room(req: AllocateRequest, db: Session = Depends(get_db
         .all()
     )
 
-    # clear old allocations for this room
-    db.query(AllocationDB).filter(AllocationDB.classroom_id == classroom.id).delete()
+    db.query(AllocationDB)\
+        .filter(AllocationDB.exam_id == req.exam_id)\
+        .filter(AllocationDB.classroom_id == classroom.id)\
+        .delete()
+
     db.commit()
+
+
+    total_seats = len(benches) * seats_per_bench
 
     allocated = 0
     waiting = 0
 
     for i, student in enumerate(students):
-        if i >= len(benches):
+        if i >= total_seats:
             waiting += 1
             continue
 
+        bench_index = i // seats_per_bench
+        seat_no = (i % seats_per_bench) + 1
+
+        bench = benches[bench_index]
+
         alloc = AllocationDB(
+            exam_id=req.exam_id,
             student_id=student.id,
             classroom_id=classroom.id,
-            bench_id=benches[i].id,
+            bench_id=bench.id,
+            seat_no=seat_no,
             exam_name="Demo Exam"
         )
         db.add(alloc)
@@ -247,41 +283,53 @@ def allocate_students_to_room(req: AllocateRequest, db: Session = Depends(get_db
     return {
         "message": "Allocation completed !",
         "room_id": room_id,
+        "seats_per_bench": seats_per_bench,
+        "total_benches": len(benches),
+        "total_seats": total_seats,
         "allocated": allocated,
         "waiting": waiting
     }
 
 
 @app.get("/public/seat-lookup")
-def seat_lookup(stu_id: int, room_id: str, db: Session = Depends(get_db)):
-    classroom = db.query(ClassroomDB).filter(ClassroomDB.room_id == room_id).first()
-    if not classroom:
-        return {"error": "Classroom not found"}
-
+def public_seat_lookup(
+    exam_id: int = Query(...),
+    stu_id: int = Query(...),
+    db: Session = Depends(get_db)
+):
+    # Find student
     student = db.query(StudentDB).filter(StudentDB.stu_id == stu_id).first()
     if not student:
         return {"error": "Student not found"}
 
-    allocation = (
-        db.query(AllocationDB)
+    # Find allocation for this student and exam
+    result = (
+        db.query(AllocationDB, BenchDB, ClassroomDB, ExamDB)
+        .join(BenchDB, AllocationDB.bench_id == BenchDB.id)
+        .join(ClassroomDB, AllocationDB.classroom_id == ClassroomDB.id)
+        .join(ExamDB, AllocationDB.exam_id == ExamDB.id)
+        .filter(AllocationDB.exam_id == exam_id)
         .filter(AllocationDB.student_id == student.id)
-        .filter(AllocationDB.classroom_id == classroom.id)
         .first()
     )
 
-    if not allocation:
-        return {"error": "Seat not allocated yet"}
+    if not result:
+        return {"error": "Seat not allocated for this exam"}
 
-    bench = db.query(BenchDB).filter(BenchDB.id == allocation.bench_id).first()
+    alloc, bench, classroom, exam = result
 
     return {
+        "exam_id": exam.id,
+        "exam_name": exam.exam_name,
         "stu_id": student.stu_id,
         "stu_name": student.stu_name,
         "room_id": classroom.room_id,
         "bench_id": bench.bench_id,
+        "seat_no": alloc.seat_no,
         "row": bench.row,
         "column": bench.column
     }
+
 
 
 @app.get("/export/allocation/excel")
@@ -312,7 +360,8 @@ def export_allocation_excel(room_id: str, db: Session = Depends(get_db)):
             "room_id": classroom.room_id,
             "bench_id": bench.bench_id,
             "column": bench.column,
-            "row": bench.row
+            "row": bench.row,
+            "seat_no": alloc.seat_no
         })
 
     df = pd.DataFrame(data)
@@ -366,8 +415,9 @@ def export_allocation_pdf(room_id: str, db: Session = Depends(get_db)):
     c.drawString(50, y, "Stu ID")
     c.drawString(110, y, "Name")
     c.drawString(280, y, "Bench")
-    c.drawString(350, y, "Column")
-    c.drawString(410, y, "Row")
+    c.drawString(350, y, "Seat No")
+    c.drawString(420, y, "Column")
+    c.drawString(480, y, "Row")
     y -= 15
 
     c.line(50, y, 550, y)
@@ -381,6 +431,7 @@ def export_allocation_pdf(room_id: str, db: Session = Depends(get_db)):
         c.drawString(50, y, str(student.stu_id))
         c.drawString(110, y, student.stu_name[:22])
         c.drawString(280, y, bench.bench_id)
+        c.drawString(350, y, str(alloc.seat_no)) 
         c.drawString(350, y, str(bench.column))
         c.drawString(410, y, str(bench.row))
         y -= 15
@@ -392,3 +443,247 @@ def export_allocation_pdf(room_id: str, db: Session = Depends(get_db)):
         filename=file_path.name,
         media_type="application/pdf"
     )
+
+
+class ExamCreateRequest(BaseModel):
+    exam_name: str
+    exam_date: str | None = None
+    session: str | None = None
+
+@app.post("/exams/create")
+def create_exam(req: ExamCreateRequest, db: Session = Depends(get_db)):
+    exam = ExamDB(exam_name=req.exam_name, exam_date=req.exam_date, session=req.session)
+    db.add(exam)
+    db.commit()
+    db.refresh(exam)
+
+    return {
+        "message": "Exam created !",
+        "exam_id": exam.id,
+        "exam_name": exam.exam_name
+    }
+
+@app.get("/exams")
+def get_exams(db: Session = Depends(get_db)):
+    exams = db.query(ExamDB).order_by(ExamDB.id.desc()).all()
+    return [
+        {
+            "exam_id": e.id,
+            "exam_name": e.exam_name,
+            "exam_date": e.exam_date,
+            "session": e.session
+        }
+        for e in exams
+    ]
+
+class RegisterYearRequest(BaseModel):
+    year: int
+
+@app.post("/exams/{exam_id}/register/year")
+def register_students_by_year(exam_id: int, req: RegisterYearRequest, db: Session = Depends(get_db)):
+    exam = db.query(ExamDB).filter(ExamDB.id == exam_id).first()
+    if not exam:
+        return {"error": "Exam not found"}
+
+    students = db.query(StudentDB).filter(StudentDB.year == req.year).all()
+    if not students:
+        return {"error": "No students found for that year"}
+
+    # clear old registration for this exam
+    db.query(ExamRegistrationDB).filter(ExamRegistrationDB.exam_id == exam_id).delete()
+    db.commit()
+
+    for s in students:
+        db.add(ExamRegistrationDB(exam_id=exam_id, student_id=s.id))
+
+    db.commit()
+
+    return {
+        "message": "Students registered !",
+        "exam_id": exam_id,
+        "registered_students": len(students)
+    }
+
+@app.get("/exams/{exam_id}/registrations")
+def get_exam_registrations(exam_id: int, db: Session = Depends(get_db)):
+    regs = (
+        db.query(ExamRegistrationDB, StudentDB)
+        .join(StudentDB, ExamRegistrationDB.student_id == StudentDB.id)
+        .filter(ExamRegistrationDB.exam_id == exam_id)
+        .order_by(StudentDB.stu_id)
+        .all()
+    )
+
+    return [
+        {
+            "stu_id": s.stu_id,
+            "stu_name": s.stu_name,
+            "year": s.year,
+            "subject": s.subject
+        }
+        for r, s in regs
+    ]
+
+@app.get("/exams/{exam_id}/allocations")
+def get_allocations(exam_id: int, room_id: str | None = None, db: Session = Depends(get_db)):
+    q = (
+        db.query(AllocationDB, StudentDB, BenchDB, ClassroomDB)
+        .join(StudentDB, AllocationDB.student_id == StudentDB.id)
+        .join(BenchDB, AllocationDB.bench_id == BenchDB.id)
+        .join(ClassroomDB, AllocationDB.classroom_id == ClassroomDB.id)
+        .filter(AllocationDB.exam_id == exam_id)
+    )
+
+    if room_id:
+        q = q.filter(ClassroomDB.room_id == room_id)
+
+    rows = q.order_by(ClassroomDB.room_id, BenchDB.column, BenchDB.row, AllocationDB.seat_no).all()
+
+    return [
+        {
+            "stu_id": student.stu_id,
+            "stu_name": student.stu_name,
+            "room_id": classroom.room_id,
+            "bench_id": bench.bench_id,
+            "seat_no": alloc.seat_no,
+            "column": bench.column,
+            "row": bench.row
+        }
+        for alloc, student, bench, classroom in rows
+    ]
+
+class RoomsRequest(BaseModel):
+    exam_id: int
+    rooms: list[str]
+
+@app.post("/capacity-check/multi")
+def capacity_check_multi(req: RoomsRequest, db: Session = Depends(get_db)):
+    # 1) Get classroom objects
+    classrooms = db.query(ClassroomDB).filter(ClassroomDB.room_id.in_(req.rooms)).all()
+    if not classrooms:
+        return {"error": "No valid classrooms found"}
+
+    # 2) Get registered students for exam
+    students = (
+        db.query(StudentDB)
+        .join(ExamRegistrationDB, ExamRegistrationDB.student_id == StudentDB.id)
+        .filter(ExamRegistrationDB.exam_id == req.exam_id)
+        .order_by(StudentDB.stu_id)
+        .all()
+    )
+
+    total_students = len(students)
+
+    room_details = []
+    total_seats = 0
+
+    for c in classrooms:
+        benches_count = db.query(BenchDB).filter(BenchDB.classroom_id == c.id).count()
+        seats = benches_count * c.seats_per_bench
+        total_seats += seats
+
+        room_details.append({
+            "room_id": c.room_id,
+            "benches": benches_count,
+            "seats_per_bench": c.seats_per_bench,
+            "total_seats": seats
+        })
+
+    shortage = max(0, total_students - total_seats)
+
+    return {
+        "exam_id": req.exam_id,
+        "registered_students": total_students,
+        "selected_rooms": req.rooms,
+        "total_seats": total_seats,
+        "shortage_students": shortage,
+        "room_details": room_details
+    }
+
+
+@app.post("/allocate/multi")
+def allocate_multi(req: RoomsRequest, db: Session = Depends(get_db)):
+    # 1) Get classrooms in the same order user selected
+    classrooms = db.query(ClassroomDB).filter(ClassroomDB.room_id.in_(req.rooms)).all()
+    if not classrooms:
+        return {"error": "No valid classrooms found"}
+
+    # map room_id -> ClassroomDB
+    room_map = {c.room_id: c for c in classrooms}
+    ordered_classrooms = [room_map[r] for r in req.rooms if r in room_map]
+
+    # 2) Get registered students
+    students = (
+        db.query(StudentDB)
+        .join(ExamRegistrationDB, ExamRegistrationDB.student_id == StudentDB.id)
+        .filter(ExamRegistrationDB.exam_id == req.exam_id)
+        .order_by(StudentDB.stu_id)
+        .all()
+    )
+
+    if not students:
+        return {"error": "No registered students for this exam"}
+
+    # 3) Clear old allocations for this exam (important)
+    db.query(AllocationDB).filter(AllocationDB.exam_id == req.exam_id).delete()
+    db.commit()
+
+    # 4) Collect all benches room-by-room in order
+    seat_slots = []  # each item: (classroom_id, bench_id, seat_no)
+    for c in ordered_classrooms:
+        benches = (
+            db.query(BenchDB)
+            .filter(BenchDB.classroom_id == c.id)
+            .order_by(BenchDB.column, BenchDB.row)
+            .all()
+        )
+
+        for bench in benches:
+            for seat_no in range(1, c.seats_per_bench + 1):
+                seat_slots.append((c.id, bench.id, seat_no))
+
+    total_seats = len(seat_slots)
+
+    allocated = 0
+    waiting = 0
+
+    # 5) Allocate students to slots
+    for i, student in enumerate(students):
+        if i >= total_seats:
+            waiting += 1
+            continue
+
+        classroom_id, bench_id, seat_no = seat_slots[i]
+
+        db.add(AllocationDB(
+            exam_id=req.exam_id,
+            student_id=student.id,
+            classroom_id=classroom_id,
+            bench_id=bench_id,
+            seat_no=seat_no,
+            exam_name="Demo Exam"
+        ))
+        allocated += 1
+
+    db.commit()
+
+    # 6) Summary room-wise allocated count
+    room_summary = {}
+    for c in ordered_classrooms:
+        count = db.query(AllocationDB).filter(
+            AllocationDB.exam_id == req.exam_id,
+            AllocationDB.classroom_id == c.id
+        ).count()
+        room_summary[c.room_id] = count
+
+    return {
+        "message": "Multi-room allocation completed ✅",
+        "exam_id": req.exam_id,
+        "selected_rooms": req.rooms,
+        "registered_students": len(students),
+        "total_seats": total_seats,
+        "allocated": allocated,
+        "waiting": waiting,
+        "room_summary": room_summary
+    }
+

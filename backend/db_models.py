@@ -43,11 +43,33 @@ class AllocationDB(Base):
     student_id = Column(Integer, ForeignKey("students.id"), nullable=False)
     classroom_id = Column(Integer, ForeignKey("classrooms.id"), nullable=False)
     bench_id = Column(Integer, ForeignKey("benches.id"), nullable=False)
-
+    seat_no = Column(Integer, nullable=False) 
+    
+    exam_id = Column(Integer, ForeignKey("exams.id"), nullable=False)
     exam_name = Column(String, nullable=True)
 
     student = relationship("StudentDB")
     classroom = relationship("ClassroomDB")
     bench = relationship("BenchDB")
+
+class ExamDB(Base):
+    __tablename__ = "exams"
+
+    id = Column(Integer, primary_key=True, index=True)
+    exam_name = Column(String, nullable=False)
+    exam_date = Column(String, nullable=True)   # keep as string for MVP
+    session = Column(String, nullable=True)     # FN / AN
+
+
+class ExamRegistrationDB(Base):
+    __tablename__ = "exam_registrations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    exam_id = Column(Integer, ForeignKey("exams.id"), nullable=False)
+    student_id = Column(Integer, ForeignKey("students.id"), nullable=False)
+
+    exam = relationship("ExamDB")
+    student = relationship("StudentDB")
+
 
 

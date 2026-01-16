@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Seat Lookup</title>
+    <link rel="stylesheet" href="lookup.css" />
+  </head>
+
+  <body>
+    <div class="wrap">
+      <h1>Exam Seat Lookup</h1>
+      <p class="sub">Enter your Exam ID and Register Number</p>
+
+      <div class="card">
+        <label>
+          Exam ID
+          <input type="number" id="examId" placeholder="1" />
+        </label>
+
+        <label>
+          Register Number (Student ID)
+          <input type="number" id="stuId" placeholder="2117230080015" />
+        </label>
+
+        <button id="btnSearch" type="button">Search Seat</button>
+      </div>
+
+      <div class="card result">
+        <h2>Result</h2>
+        <pre id="output">Enter details and click Search.</pre>
+      </div>
+    </div>
+
+    <script src="lookup.js"></script>
+  </body>
+</html>

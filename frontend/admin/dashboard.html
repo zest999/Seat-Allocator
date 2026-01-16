@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Seat Allocator - Admin</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+
+  <body>
+    <header class="header">
+      <h1>Seat Allocator - Admin Dashboard</h1>
+      <p class="sub">Basic UI (HTML/CSS/JS) connected to FastAPI</p>
+    </header>
+
+    <main class="container">
+      <!-- STATUS -->
+      <section class="card">
+        <h2>API Status</h2>
+        <button id="btnPing" type="button">Ping Backend</button>
+        <pre id="pingOut" class="out"></pre>
+      </section>
+
+      <!-- STUDENTS -->
+      <section class="card">
+        <h2>Students</h2>
+        <div class="row">
+          <button id="btnImportStudents" type="button">Import Students (Excel)</button>
+          <button id="btnGetStudents" type="button">View Students</button>
+        </div>
+        <pre id="studentsOut" class="out"></pre>
+      </section>
+
+      <!-- CLASSROOMS -->
+      <section class="card">
+        <h2>Create Classroom</h2>
+
+        <form id="classroomForm" class="form">
+          <label>
+            Room ID
+            <input type="text" id="roomId" placeholder="B201" required />
+          </label>
+
+          <label>
+            Seats per bench
+            <input type="number" id="seatsPerBench" min="1" value="2" required />
+          </label>
+
+          <label>
+            Layout (JSON)
+            <textarea id="layoutJson" rows="4" required>{
+  "1": 4,
+  "2": 5,
+  "3": 3
+}</textarea
+            >
+          </label>
+
+          <button type="submit">Create Classroom</button>
+        </form>
+
+        <div class="row">
+          <button id="btnGetClassrooms" type="button">View Classrooms</button>
+        </div>
+
+        <pre id="classroomsOut" class="out"></pre>
+      </section>
+
+      <!-- EXAMS -->
+      <section class="card">
+        <h2>Create Exam</h2>
+
+        <form id="examForm" class="form">
+          <label>
+            Exam Name
+            <input type="text" id="examName" placeholder="Internal Test 1" required />
+          </label>
+
+          <label>
+            Exam Date (optional)
+            <input type="text" id="examDate" placeholder="2026-01-15" />
+          </label>
+
+          <label>
+            Session (optional)
+            <input type="text" id="examSession" placeholder="FN / AN" />
+          </label>
+
+          <button type="submit">Create Exam</button>
+        </form>
+
+        <div class="row">
+          <button id="btnGetExams" type="button">View Exams</button>
+        </div>
+
+        <pre id="examOut" class="out"></pre>
+      </section>
+
+      <!-- REGISTER STUDENTS -->
+      <section class="card">
+        <h2>Register Students for Exam (by Year)</h2>
+
+        <form id="registerForm" class="form">
+          <label>
+            Exam ID
+            <input type="number" id="regExamId" min="1" placeholder="1" required />
+          </label>
+
+          <label>
+            Year
+            <input type="number" id="regYear" min="1" placeholder="3" required />
+          </label>
+
+          <button type="submit">Register</button>
+        </form>
+
+        <div class="row">
+          <button id="btnViewRegistrations" type="button">View Registrations</button>
+        </div>
+
+        <pre id="registerOut" class="out"></pre>
+      </section>
+
+      <!-- ALLOCATION -->
+      <section class="card">
+        <h2>Allocate Seats</h2>
+
+        <form id="allocateForm" class="form">
+          <label>
+            Exam ID
+            <input type="number" id="allocExamId" min="1" placeholder="1" required />
+          </label>
+
+          <label>
+            Room ID (Single-room allocate)
+            <input type="text" id="allocRoomId" placeholder="B201" />
+          </label>
+
+          <!-- MULTI ROOM SELECT -->
+          <div class="checkbox-wrap">
+            <p><b>Select Rooms (Multi-room allocate)</b></p>
+            <div id="roomsList" class="rooms"></div>
+          </div>
+
+          <div class="row">
+            <button id="btnLoadRooms" type="button">Load Rooms</button>
+            <button id="btnCapacityCheck" type="button">Capacity Check</button>
+            <button id="btnAllocateMulti" type="button">Allocate (Multi-Room)</button>
+          </div>
+
+          <button type="submit">Allocate (Single Room)</button>
+        </form>
+
+        <div class="row">
+          <button id="btnViewAllocations" type="button">View Allocations</button>
+        </div>
+
+        <label>
+          Export Room ID
+          <input type="text" id="exportRoomId" placeholder="B201" />
+        </label>
+
+        <div class="row">
+          <button id="btnExportExcel" type="button">Export Excel</button>
+          <button id="btnExportPdf" type="button">Export PDF</button>
+        </div>
+
+        <pre id="allocateOut" class="out"></pre>
+      </section>
+    </main>
+
+    <script src="admin.js"></script>
+  </body>
+</html>
