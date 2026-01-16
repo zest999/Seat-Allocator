@@ -677,7 +677,7 @@ def allocate_multi(req: RoomsRequest, db: Session = Depends(get_db)):
         room_summary[c.room_id] = count
 
     return {
-        "message": "Multi-room allocation completed ✅",
+        "message": "Multi-room allocation completed !",
         "exam_id": req.exam_id,
         "selected_rooms": req.rooms,
         "registered_students": len(students),

@@ -10,7 +10,7 @@ document.getElementById("btnSearch").addEventListener("click", async () => {
   const stuId = Number(document.getElementById("stuId").value);
 
   if (!examId || !stuId) {
-    show("❌ Please enter both Exam ID and Register Number");
+    show("Please enter both Exam ID and Register Number");
     return;
   }
 
@@ -22,6 +22,6 @@ document.getElementById("btnSearch").addEventListener("click", async () => {
     const data = await res.json();
     show(data);
   } catch (err) {
-    show("❌ Could not connect to backend. Is FastAPI running?");
+    show("Could not connect to backend. Is FastAPI running?");
   }
 });

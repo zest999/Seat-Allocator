@@ -51,7 +51,7 @@ document.getElementById("classroomForm").addEventListener("submit", async (e) =>
   try {
     layout = JSON.parse(layoutText);
   } catch (err) {
-    show("classroomsOut", "❌ Layout JSON invalid. Example: {\"1\":4,\"2\":5}");
+    show("classroomsOut", "Layout JSON invalid. Example: {\"1\":4,\"2\":5}");
     return;
   }
 
@@ -76,7 +76,7 @@ document.getElementById("examForm").addEventListener("submit", async (e) => {
   show("examOut", r);
 });
 
-// ✅ View all exams
+// View all exams
 document.getElementById("btnGetExams").addEventListener("click", async () => {
   const r = await apiGet("/exams");
   show("examOut", r);
@@ -93,7 +93,7 @@ document.getElementById("registerForm").addEventListener("submit", async (e) => 
   show("registerOut", r);
 });
 
-// ✅ View registrations
+// View registrations
 document.getElementById("btnViewRegistrations").addEventListener("click", async () => {
   const examId = Number(document.getElementById("regExamId").value);
   if (!examId) return show("registerOut", "Enter Exam ID to view registrations");
@@ -113,7 +113,7 @@ document.getElementById("allocateForm").addEventListener("submit", async (e) => 
   show("allocateOut", r);
 });
 
-// ✅ View allocations
+// View allocations
 document.getElementById("btnViewAllocations").addEventListener("click", async () => {
   const examId = Number(document.getElementById("allocExamId").value);
   const roomId = document.getElementById("allocRoomId").value.trim();
@@ -169,7 +169,7 @@ async function loadRooms() {
     roomsDiv.appendChild(label);
   });
 
-  show("allocateOut", "✅ Rooms loaded. Select rooms and allocate.");
+  show("allocateOut", "Rooms loaded. Select rooms and allocate.");
 }
 
 
