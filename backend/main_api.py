@@ -5,6 +5,7 @@ from db_models import StudentDB, ClassroomDB, BenchDB, AllocationDB, ExamDB, Exa
 import pandas as pd
 import json
 from math import ceil
+from collections import defaultdict, deque
 from layouts import generate_layout
 from pydantic import BaseModel
 from fastapi.responses import FileResponse
@@ -42,60 +43,178 @@ def root():
 
 @app.get("/students")
 def get_students(db: Session = Depends(get_db)):
-    students = db.query(StudentDB).all()
+    students = db.query(StudentDB).order_by(StudentDB.stu_id).all()
+
     return [
         {
             "stu_id": s.stu_id,
             "stu_name": s.stu_name,
             "year": s.year,
-            "subject": s.subject
+            "dept": s.dept,
+            "section": s.section,
+            "phone": s.phone
         }
         for s in students
     ]
 
 
 @app.post("/students/import")
-def import_students_from_excel(db: Session = Depends(get_db)):
-    file_path = "../students.xlsx"  
+def import_students(db: Session = Depends(get_db)):
+    file_path = Path(__file__).resolve().parent.parent / "students.xlsx"
 
-    try:
-        df = pd.read_excel(file_path)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Excel read failed: {str(e)}")
+    if not file_path.exists():
+        return {"error": f"students.xlsx not found at {file_path}"}
 
-    required_cols = {"stu_id", "stu_name", "year", "subject"}
-    if not required_cols.issubset(df.columns):
-        missing = required_cols - set(df.columns)
-        raise HTTPException(status_code=400, detail=f"Missing columns: {missing}")
+    df = pd.read_excel(file_path)
+
+    required_cols = ["stu_id", "stu_name", "year", "dept", "section"]
+    missing = [c for c in required_cols if c not in df.columns]
+    if missing:
+        return {"error": f"Missing columns in Excel: {missing}"}
 
     inserted = 0
-    skipped = 0
+    updated = 0
 
     for _, row in df.iterrows():
         stu_id = int(row["stu_id"])
+        stu_name = str(row["stu_name"]).strip()
+        year = int(row["year"])
+        dept = str(row["dept"]).strip().upper()
+        section = str(row["section"]).strip().upper()
 
+        phone = None
+        if "phone" in df.columns and not pd.isna(row["phone"]):
+            phone = str(row["phone"]).strip()
+
+        # upsert logic (update if exists, else insert)
         existing = db.query(StudentDB).filter(StudentDB.stu_id == stu_id).first()
+
         if existing:
-            skipped += 1
-            continue
-
-        student = StudentDB(
-            stu_id=stu_id,
-            stu_name=str(row["stu_name"]),
-            year=int(row["year"]),
-            subject=str(row["subject"])
-        )
-
-        db.add(student)
-        inserted += 1
+            existing.stu_name = stu_name
+            existing.year = year
+            existing.dept = dept
+            existing.section = section
+            existing.phone = phone
+            updated += 1
+        else:
+            db.add(StudentDB(
+                stu_id=stu_id,
+                stu_name=stu_name,
+                year=year,
+                dept=dept,
+                section=section,
+                phone=phone
+            ))
+            inserted += 1
 
     db.commit()
 
     return {
         "message": "Student import completed !",
         "inserted": inserted,
-        "skipped_duplicates": skipped
+        "updated": updated,
+        "total_rows": len(df)
     }
+
+@app.post("/exams/{exam_id}/registrations/import-excel")
+def import_exam_registrations(exam_id: int, db: Session = Depends(get_db)):
+
+    exam = db.query(ExamDB).filter(ExamDB.id == exam_id).first()
+    if not exam:
+        raise HTTPException(status_code=404, detail="Exam not found")
+
+    file_path = Path(__file__).resolve().parent.parent / "students_exams.xlsx"
+
+    if not file_path.exists():
+        return {"error": f"students_exams.xlsx not found at {file_path}"}
+
+    try:
+        df = pd.read_excel(file_path)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Excel read failed: {str(e)}")
+
+    required_cols = {"stu_id", "subject_code"}
+    if not required_cols.issubset(df.columns):
+        missing = required_cols - set(df.columns)
+        raise HTTPException(status_code=400, detail=f"Missing columns: {missing}")
+
+    inserted = 0
+    skipped_missing_student = 0
+
+    db.query(ExamRegistrationDB).filter(ExamRegistrationDB.exam_id == exam_id).delete()
+    db.commit()
+
+    for _, row in df.iterrows():
+        stu_id = int(row["stu_id"])
+        subject_code = str(row["subject_code"]).strip().upper()
+
+        student = db.query(StudentDB).filter(StudentDB.stu_id == stu_id).first()
+        if not student:
+            skipped_missing_student += 1
+            continue
+
+        reg = ExamRegistrationDB(
+            exam_id=exam_id,
+            student_id=student.id,
+            subject_code=subject_code
+        )
+
+        db.add(reg)
+        inserted += 1
+
+    db.commit()
+
+    return {
+        "message": "Exam registration import completed !",
+        "exam_id": exam_id,
+        "inserted": inserted,
+        "skipped_missing_student": skipped_missing_student,
+        "total_rows": len(df)
+    }
+
+@app.get("/exams/{exam_id}/registrations")
+def get_exam_registrations(exam_id: int, db: Session = Depends(get_db)):
+    regs = (
+        db.query(ExamRegistrationDB, StudentDB)
+        .join(StudentDB, ExamRegistrationDB.student_id == StudentDB.id)
+        .filter(ExamRegistrationDB.exam_id == exam_id)
+        .order_by(StudentDB.stu_id)
+        .all()
+    )
+
+    return [
+        {
+            "stu_id": s.stu_id,
+            "stu_name": s.stu_name,
+            "year": s.year,
+            "dept": s.dept,
+            "section": s.section,
+            "subject_code": r.subject_code
+        }
+        for r, s in regs
+    ]
+
+@app.get("/exams/{exam_id}/registrations")
+def get_exam_registrations(exam_id: int, db: Session = Depends(get_db)):
+    regs = (
+        db.query(ExamRegistrationDB, StudentDB)
+        .join(StudentDB, ExamRegistrationDB.student_id == StudentDB.id)
+        .filter(ExamRegistrationDB.exam_id == exam_id)
+        .order_by(StudentDB.stu_id)
+        .all()
+    )
+
+    return [
+        {
+            "stu_id": s.stu_id,
+            "stu_name": s.stu_name,
+            "year": s.year,
+            "dept": s.dept,
+            "section": s.section,
+            "subject_code": r.subject_code
+        }
+        for r, s in regs
+    ]
 
 class ClassroomCreateRequest(BaseModel):
     room_id: str
@@ -330,47 +449,52 @@ def public_seat_lookup(
         "column": bench.column
     }
 
-
-
+ 
 @app.get("/export/allocation/excel")
 def export_allocation_excel(room_id: str, db: Session = Depends(get_db)):
     classroom = db.query(ClassroomDB).filter(ClassroomDB.room_id == room_id).first()
     if not classroom:
         return {"error": "Classroom not found"}
 
-    allocations = (
-        db.query(AllocationDB, StudentDB, BenchDB)
+    rows = (
+        db.query(AllocationDB, StudentDB, BenchDB, ExamRegistrationDB)
         .join(StudentDB, AllocationDB.student_id == StudentDB.id)
         .join(BenchDB, AllocationDB.bench_id == BenchDB.id)
+        .join(
+            ExamRegistrationDB,
+            (ExamRegistrationDB.student_id == StudentDB.id) &
+            (ExamRegistrationDB.exam_id == AllocationDB.exam_id)
+        )
         .filter(AllocationDB.classroom_id == classroom.id)
-        .order_by(BenchDB.column, BenchDB.row)
+        .order_by(BenchDB.column, BenchDB.row, AllocationDB.seat_no)
         .all()
     )
 
-    if not allocations:
+    if not rows:
         return {"error": "No allocation found. Run /allocate first."}
 
-    data = []
-    for alloc, student, bench in allocations:
-        data.append({
-            "stu_id": student.stu_id,
-            "stu_name": student.stu_name,
-            "year": student.year,
-            "subject": student.subject,
-            "room_id": classroom.room_id,
-            "bench_id": bench.bench_id,
-            "column": bench.column,
-            "row": bench.row,
-            "seat_no": alloc.seat_no
-        })
-
-    df = pd.DataFrame(data)
-
-    # save excel in backend/exports/
     export_dir = Path(__file__).resolve().parent / "exports"
     export_dir.mkdir(exist_ok=True)
 
     file_path = export_dir / f"allocation_{room_id}.xlsx"
+
+    data = []
+    for alloc, student, bench, reg in rows:
+        data.append({
+            "stu_id": student.stu_id,
+            "stu_name": student.stu_name,
+            "year": student.year,
+            "dept": student.dept,
+            "section": student.section,
+            "subject_code": reg.subject_code,   
+            "room_id": room_id,
+            "bench_id": bench.bench_id,
+            "seat_no": alloc.seat_no,
+            "column": bench.column,
+            "row": bench.row
+        })
+
+    df = pd.DataFrame(data)
     df.to_excel(file_path, index=False)
 
     return FileResponse(
@@ -519,10 +643,69 @@ def get_exam_registrations(exam_id: int, db: Session = Depends(get_db)):
             "stu_id": s.stu_id,
             "stu_name": s.stu_name,
             "year": s.year,
-            "subject": s.subject
+            "dept": s.dept,
+            "section": s.section,
+            "subject_code": r.subject_code   
         }
         for r, s in regs
     ]
+
+@app.post("/exams/{exam_id}/registrations/import-excel")
+def import_exam_registrations(exam_id: int, db: Session = Depends(get_db)):
+    
+    exam = db.query(ExamDB).filter(ExamDB.id == exam_id).first()
+    if not exam:
+        raise HTTPException(status_code=404, detail="Exam not found")
+
+    file_path = Path(__file__).resolve().parent.parent / "students_exams.xlsx"
+
+    if not file_path.exists():
+        return {"error": f"students_exams.xlsx not found at {file_path}"}
+
+    try:
+        df = pd.read_excel(file_path)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Excel read failed: {str(e)}")
+
+    required_cols = {"stu_id", "subject_code"}
+    if not required_cols.issubset(df.columns):
+        missing = required_cols - set(df.columns)
+        raise HTTPException(status_code=400, detail=f"Missing columns: {missing}")
+
+    # Clear old registrations for this exam
+    db.query(ExamRegistrationDB).filter(ExamRegistrationDB.exam_id == exam_id).delete()
+    db.commit()
+
+    inserted = 0
+    skipped_missing_student = 0
+
+    for _, row in df.iterrows():
+        stu_id = int(row["stu_id"])
+        subject_code = str(row["subject_code"]).strip().upper()
+
+        student = db.query(StudentDB).filter(StudentDB.stu_id == stu_id).first()
+        if not student:
+            skipped_missing_student += 1
+            continue
+
+        db.add(
+            ExamRegistrationDB(
+                exam_id=exam_id,
+                student_id=student.id,
+                subject_code=subject_code,
+            )
+        )
+        inserted += 1
+
+    db.commit()
+
+    return {
+        "message": "Exam registrations imported !",
+        "exam_id": exam_id,
+        "inserted": inserted,
+        "skipped_missing_student": skipped_missing_student,
+        "total_rows": len(df),
+    }
 
 @app.get("/exams/{exam_id}/allocations")
 def get_allocations(exam_id: int, room_id: str | None = None, db: Session = Depends(get_db)):
@@ -602,88 +785,291 @@ def capacity_check_multi(req: RoomsRequest, db: Session = Depends(get_db)):
 
 
 @app.post("/allocate/multi")
-def allocate_multi(req: RoomsRequest, db: Session = Depends(get_db)):
-    # 1) Get classrooms in the same order user selected
+def allocate_multi_advanced(req: RoomsRequest, db: Session = Depends(get_db)):
+    # 1) Validate classrooms
     classrooms = db.query(ClassroomDB).filter(ClassroomDB.room_id.in_(req.rooms)).all()
     if not classrooms:
         return {"error": "No valid classrooms found"}
 
-    # map room_id -> ClassroomDB
     room_map = {c.room_id: c for c in classrooms}
     ordered_classrooms = [room_map[r] for r in req.rooms if r in room_map]
 
-    # 2) Get registered students
-    students = (
-        db.query(StudentDB)
-        .join(ExamRegistrationDB, ExamRegistrationDB.student_id == StudentDB.id)
+    # 2) Fetch registered students for the exam WITH subject_code
+    regs = (
+        db.query(ExamRegistrationDB, StudentDB)
+        .join(StudentDB, ExamRegistrationDB.student_id == StudentDB.id)
         .filter(ExamRegistrationDB.exam_id == req.exam_id)
         .order_by(StudentDB.stu_id)
         .all()
     )
 
-    if not students:
-        return {"error": "No registered students for this exam"}
+    if not regs:
+        return {"error": "No exam registrations found. Import students_exams.xlsx first."}
 
-    # 3) Clear old allocations for this exam (important)
+    students = [{"student": s, "subject_code": r.subject_code} for r, s in regs]
+
+    # 3) Clear old allocations for this exam
     db.query(AllocationDB).filter(AllocationDB.exam_id == req.exam_id).delete()
     db.commit()
 
-    # 4) Collect all benches room-by-room in order
-    seat_slots = []  # each item: (classroom_id, bench_id, seat_no)
-    for c in ordered_classrooms:
+    # 4) Build seat slots
+    slots = build_seat_slots(db, ordered_classrooms)
+    if not slots:
+        return {"error": "No benches/seats found in selected rooms"}
+
+    # 5) Build adjacency map
+    adj_map = build_adjacency_map(slots)
+
+    # 6) Run advanced allocator
+    allocations, report = advanced_allocate(students, slots, adj_map)
+
+    # 7) Save allocations to DB
+    allocated = 0
+    for a in allocations:
+        slot = slots[a["slot_idx"]]
+        student = a["student"]
+
+        db.add(AllocationDB(
+            exam_id=req.exam_id,
+            student_id=student.id,
+            classroom_id=slot["classroom_id"],
+            bench_id=slot["bench_id"],
+            seat_no=slot["seat_no"],
+            exam_name="Advanced Exam"
+        ))
+        allocated += 1
+
+    db.commit()
+
+    waiting = max(0, len(students) - len(slots))
+
+    return {
+        "message": "Advanced multi-room allocation completed ✅",
+        "exam_id": req.exam_id,
+        "selected_rooms": req.rooms,
+        "registered_students": len(students),
+        "total_seats": len(slots),
+        "allocated": allocated,
+        "waiting": waiting,
+        "quality_report": report
+    }
+
+
+# ------------------ ADVANCED ALLOCATOR HELPERS ------------------
+
+def build_seat_slots(db: Session, classrooms_ordered):
+    """
+    Returns seat slots in order:
+    [
+      {"classroom_id":..., "room_id":..., "bench_id":..., "bench_key":(room_id,col,row), "seat_no":1},
+      ...
+    ]
+    bench_key is used for adjacency.
+    """
+    slots = []
+
+    for c in classrooms_ordered:
         benches = (
             db.query(BenchDB)
             .filter(BenchDB.classroom_id == c.id)
             .order_by(BenchDB.column, BenchDB.row)
             .all()
         )
-
         for bench in benches:
             for seat_no in range(1, c.seats_per_bench + 1):
-                seat_slots.append((c.id, bench.id, seat_no))
+                slots.append({
+                    "classroom_id": c.id,
+                    "room_id": c.room_id,
+                    "bench_id": bench.id,
+                    "bench_key": (c.room_id, bench.column, bench.row),
+                    "seat_no": seat_no,
+                    "col": bench.column,
+                    "row": bench.row,
+                })
 
-    total_seats = len(seat_slots)
+    return slots
 
-    allocated = 0
-    waiting = 0
 
-    # 5) Allocate students to slots
-    for i, student in enumerate(students):
-        if i >= total_seats:
-            waiting += 1
-            continue
+def build_adjacency_map(slots):
+    """
+    adjacency is based on benches:
+      - same bench (strong)
+      - left/right benches (col-1 / col+1 same row)
+      - front/back benches (same col row-1/row+1)
+    """
+    # map bench_key -> indices of slots in that bench
+    bench_to_slot_idxs = defaultdict(list)
+    bench_exists = set()
 
-        classroom_id, bench_id, seat_no = seat_slots[i]
+    for i, s in enumerate(slots):
+        bench_to_slot_idxs[s["bench_key"]].append(i)
+        bench_exists.add(s["bench_key"])
 
-        db.add(AllocationDB(
-            exam_id=req.exam_id,
-            student_id=student.id,
-            classroom_id=classroom_id,
-            bench_id=bench_id,
-            seat_no=seat_no,
-            exam_name="Demo Exam"
-        ))
-        allocated += 1
+    # adjacency map per slot index -> neighbor slot indices
+    adj = defaultdict(set)
 
-    db.commit()
+    for bench_key, idxs in bench_to_slot_idxs.items():
+        room_id, col, row = bench_key
 
-    # 6) Summary room-wise allocated count
-    room_summary = {}
-    for c in ordered_classrooms:
-        count = db.query(AllocationDB).filter(
-            AllocationDB.exam_id == req.exam_id,
-            AllocationDB.classroom_id == c.id
-        ).count()
-        room_summary[c.room_id] = count
+        # 1) Same bench adjacency: all seats on same bench are neighbors
+        for a in idxs:
+            for b in idxs:
+                if a != b:
+                    adj[a].add(b)
 
-    return {
-        "message": "Multi-room allocation completed !",
-        "exam_id": req.exam_id,
-        "selected_rooms": req.rooms,
-        "registered_students": len(students),
-        "total_seats": total_seats,
-        "allocated": allocated,
-        "waiting": waiting,
-        "room_summary": room_summary
+        # 2) Neighbor benches
+        neighbor_benches = [
+            (room_id, col - 1, row),
+            (room_id, col + 1, row),
+            (room_id, col, row - 1),
+            (room_id, col, row + 1),
+        ]
+
+        for nb in neighbor_benches:
+            if nb in bench_exists:
+                for a in idxs:
+                    for b in bench_to_slot_idxs[nb]:
+                        adj[a].add(b)
+
+    return adj
+
+
+def advanced_allocate(students, slots, adj_map):
+    """
+    students: list of dicts
+      [{"student": StudentDB, "subject_code": "OS301"}, ...]
+
+    returns:
+      allocations: list of dict {slot_index, student, subject_code}
+      report: violation counts
+    """
+
+    # Weights (you can tune these)
+    W_SAME_SUBJECT_SAME_BENCH = 1000
+    W_SAME_DEPT_SAME_BENCH    = 600
+    W_SAME_SUBJECT_ADJ        = 120
+    W_SAME_DEPT_ADJ           = 50
+    W_SAME_SECTION_ADJ        = 20
+    W_SAME_YEAR_ADJ           = 10
+
+    # Remaining students list
+    remaining = students[:]
+
+    # placements: slot_index -> placed student info
+    placed = {}
+
+    # for quick check: bench_key -> list of placed infos on that bench
+    bench_placed = defaultdict(list)
+
+    # report counters
+    report = {
+        "viol_same_subject_same_bench": 0,
+        "viol_same_dept_same_bench": 0,
+        "viol_same_subject_adjacent": 0,
+        "viol_same_dept_adjacent": 0,
+        "viol_same_section_adjacent": 0,
+        "viol_same_year_adjacent": 0,
     }
 
+    def score_candidate(slot_idx, cand):
+        """
+        lower score = better
+        cand has keys: student, subject_code
+        """
+        slot = slots[slot_idx]
+        bench_key = slot["bench_key"]
+
+        score = 0
+
+        # --- Bench rule checks (hard)
+        for other in bench_placed[bench_key]:
+            if other["subject_code"] == cand["subject_code"]:
+                score += W_SAME_SUBJECT_SAME_BENCH
+            if other["student"].dept == cand["student"].dept:
+                score += W_SAME_DEPT_SAME_BENCH
+
+        # --- Adjacency checks (soft)
+        for nb_idx in adj_map.get(slot_idx, []):
+            if nb_idx not in placed:
+                continue
+            other = placed[nb_idx]
+
+            if other["subject_code"] == cand["subject_code"]:
+                score += W_SAME_SUBJECT_ADJ
+            if other["student"].dept == cand["student"].dept:
+                score += W_SAME_DEPT_ADJ
+            if other["student"].section == cand["student"].section:
+                score += W_SAME_SECTION_ADJ
+            if other["student"].year == cand["student"].year:
+                score += W_SAME_YEAR_ADJ
+
+        return score
+
+    # Greedy seat filling
+    for slot_idx in range(min(len(slots), len(remaining))):
+        # pick best candidate among remaining students
+        best_i = None
+        best_score = None
+
+        # To keep it efficient, sample up to N candidates each time
+        # (for huge numbers). For small N, it checks all.
+        CANDIDATE_LIMIT = 80
+        candidate_pool = remaining if len(remaining) <= CANDIDATE_LIMIT else remaining[:CANDIDATE_LIMIT]
+
+        for i, cand in enumerate(candidate_pool):
+            s = score_candidate(slot_idx, cand)
+            if best_score is None or s < best_score:
+                best_score = s
+                best_i = i
+
+                # perfect score found
+                if best_score == 0:
+                    break
+
+        chosen = remaining.pop(best_i)
+        placed[slot_idx] = chosen
+        bench_placed[slots[slot_idx]["bench_key"]].append(chosen)
+
+    # Build report by checking violations in final placement
+    # (This counts actual violations, not just penalty scores)
+    for slot_idx, info in placed.items():
+        slot = slots[slot_idx]
+        bench_key = slot["bench_key"]
+
+        # same bench violations
+        for other in bench_placed[bench_key]:
+            if other is info:
+                continue
+            if other["subject_code"] == info["subject_code"]:
+                report["viol_same_subject_same_bench"] += 1
+            if other["student"].dept == info["student"].dept:
+                report["viol_same_dept_same_bench"] += 1
+
+        # adjacency violations
+        for nb in adj_map.get(slot_idx, []):
+            if nb not in placed:
+                continue
+            other = placed[nb]
+            if other["subject_code"] == info["subject_code"]:
+                report["viol_same_subject_adjacent"] += 1
+            if other["student"].dept == info["student"].dept:
+                report["viol_same_dept_adjacent"] += 1
+            if other["student"].section == info["student"].section:
+                report["viol_same_section_adjacent"] += 1
+            if other["student"].year == info["student"].year:
+                report["viol_same_year_adjacent"] += 1
+
+    # adjacency counts are double-counted (A-B and B-A), divide by 2
+    for k in ["viol_same_subject_adjacent", "viol_same_dept_adjacent", "viol_same_section_adjacent", "viol_same_year_adjacent"]:
+        report[k] = report[k] // 2
+
+    # bench counts double-counted too (seat1-seat2 and seat2-seat1)
+    report["viol_same_subject_same_bench"] = report["viol_same_subject_same_bench"] // 2
+    report["viol_same_dept_same_bench"] = report["viol_same_dept_same_bench"] // 2
+
+    allocations = []
+    for slot_idx, info in placed.items():
+        allocations.append({"slot_idx": slot_idx, **info})
+
+    allocations.sort(key=lambda x: x["slot_idx"])
+    return allocations, report

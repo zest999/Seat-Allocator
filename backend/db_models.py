@@ -9,7 +9,9 @@ class StudentDB(Base):
     stu_id = Column(Integer, unique = True, nullable = False)
     stu_name = Column(String, nullable = False)
     year = Column(Integer, nullable = False)
-    subject = Column(String, nullable = False)
+    dept = Column(String, nullable=False)
+    section = Column(String, nullable=False)
+    phone = Column(String, nullable=True)
 
 class ClassroomDB(Base):
     __tablename__ = "classrooms"
@@ -28,7 +30,7 @@ class BenchDB(Base):
     __tablename__ = "benches"
 
     id = Column(Integer, primary_key=True, index=True)
-    bench_id = Column(String, index=True, nullable=False)  # "C1-R1"
+    bench_id = Column(String, index=True, nullable=False)  
     row = Column(Integer, nullable=False)
     column = Column(Integer, nullable=False)
 
@@ -57,19 +59,23 @@ class ExamDB(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     exam_name = Column(String, nullable=False)
-    exam_date = Column(String, nullable=True)   # keep as string for MVP
-    session = Column(String, nullable=True)     # FN / AN
+    exam_date = Column(String, nullable=True)   
+    session = Column(String, nullable=True)     
 
 
 class ExamRegistrationDB(Base):
     __tablename__ = "exam_registrations"
 
     id = Column(Integer, primary_key=True, index=True)
+
     exam_id = Column(Integer, ForeignKey("exams.id"), nullable=False)
     student_id = Column(Integer, ForeignKey("students.id"), nullable=False)
+    subject_code = Column(String, nullable=False)
 
     exam = relationship("ExamDB")
     student = relationship("StudentDB")
+
+
 
 
 
