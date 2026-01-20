@@ -196,27 +196,6 @@ def get_exam_registrations(exam_id: int, db: Session = Depends(get_db)):
         for r, s in regs
     ]
 
-@app.get("/exams/{exam_id}/registrations")
-def get_exam_registrations(exam_id: int, db: Session = Depends(get_db)):
-    regs = (
-        db.query(ExamRegistrationDB, StudentDB)
-        .join(StudentDB, ExamRegistrationDB.student_id == StudentDB.id)
-        .filter(ExamRegistrationDB.exam_id == exam_id)
-        .order_by(StudentDB.stu_id)
-        .all()
-    )
-
-    return [
-        {
-            "stu_id": s.stu_id,
-            "stu_name": s.stu_name,
-            "year": s.year,
-            "dept": s.dept,
-            "section": s.section,
-            "subject_code": r.subject_code
-        }
-        for r, s in regs
-    ]
 
 class ClassroomCreateRequest(BaseModel):
     room_id: str
@@ -670,27 +649,6 @@ def register_students_by_year(exam_id: int, req: RegisterYearRequest, db: Sessio
         "registered_students": len(students)
     }
 
-@app.get("/exams/{exam_id}/registrations")
-def get_exam_registrations(exam_id: int, db: Session = Depends(get_db)):
-    regs = (
-        db.query(ExamRegistrationDB, StudentDB)
-        .join(StudentDB, ExamRegistrationDB.student_id == StudentDB.id)
-        .filter(ExamRegistrationDB.exam_id == exam_id)
-        .order_by(StudentDB.stu_id)
-        .all()
-    )
-
-    return [
-        {
-            "stu_id": s.stu_id,
-            "stu_name": s.stu_name,
-            "year": s.year,
-            "dept": s.dept,
-            "section": s.section,
-            "subject_code": r.subject_code   
-        }
-        for r, s in regs
-    ]
 
 @app.post("/exams/{exam_id}/registrations/import-excel")
 def import_exam_registrations(exam_id: int, db: Session = Depends(get_db)):
