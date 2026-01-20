@@ -5,6 +5,8 @@ from db_models import StudentDB, ClassroomDB, BenchDB, AllocationDB, ExamDB, Exa
 import pandas as pd
 import json
 from math import ceil
+import heapq
+import random
 from collections import defaultdict, deque
 from layouts import generate_layout
 from pydantic import BaseModel
@@ -451,10 +453,14 @@ def public_seat_lookup(
 
  
 @app.get("/export/allocation/excel")
-def export_allocation_excel(room_id: str, db: Session = Depends(get_db)):
+def export_allocation_excel(
+    exam_id: int = Query(...),
+    room_id: str = Query(...),
+    db: Session = Depends(get_db)
+):
     classroom = db.query(ClassroomDB).filter(ClassroomDB.room_id == room_id).first()
     if not classroom:
-        return {"error": "Classroom not found"}
+        raise HTTPException(status_code=404, detail="Classroom not found")
 
     rows = (
         db.query(AllocationDB, StudentDB, BenchDB, ExamRegistrationDB)
@@ -465,28 +471,31 @@ def export_allocation_excel(room_id: str, db: Session = Depends(get_db)):
             (ExamRegistrationDB.student_id == StudentDB.id) &
             (ExamRegistrationDB.exam_id == AllocationDB.exam_id)
         )
+        .filter(AllocationDB.exam_id == exam_id)
         .filter(AllocationDB.classroom_id == classroom.id)
         .order_by(BenchDB.column, BenchDB.row, AllocationDB.seat_no)
         .all()
     )
 
     if not rows:
-        return {"error": "No allocation found. Run /allocate first."}
+        raise HTTPException(status_code=404, detail="No allocation found for this exam+room. Run allocation first.")
 
     export_dir = Path(__file__).resolve().parent / "exports"
     export_dir.mkdir(exist_ok=True)
 
-    file_path = export_dir / f"allocation_{room_id}.xlsx"
+    file_path = export_dir / f"allocation_exam{exam_id}_{room_id}.xlsx"
 
     data = []
     for alloc, student, bench, reg in rows:
         data.append({
+            "exam_id": alloc.exam_id,
             "stu_id": student.stu_id,
             "stu_name": student.stu_name,
             "year": student.year,
             "dept": student.dept,
             "section": student.section,
-            "subject_code": reg.subject_code,   
+            "phone": student.phone,
+            "subject_code": reg.subject_code,
             "room_id": room_id,
             "bench_id": bench.bench_id,
             "seat_no": alloc.seat_no,
@@ -505,60 +514,93 @@ def export_allocation_excel(room_id: str, db: Session = Depends(get_db)):
 
 
 @app.get("/export/allocation/pdf")
-def export_allocation_pdf(room_id: str, db: Session = Depends(get_db)):
+def export_allocation_pdf(
+    exam_id: int = Query(...),
+    room_id: str = Query(...),
+    db: Session = Depends(get_db)
+):
     classroom = db.query(ClassroomDB).filter(ClassroomDB.room_id == room_id).first()
     if not classroom:
-        return {"error": "Classroom not found"}
+        raise HTTPException(status_code=404, detail="Classroom not found")
 
-    allocations = (
-        db.query(AllocationDB, StudentDB, BenchDB)
+    rows = (
+        db.query(AllocationDB, StudentDB, BenchDB, ExamRegistrationDB, ExamDB)
         .join(StudentDB, AllocationDB.student_id == StudentDB.id)
         .join(BenchDB, AllocationDB.bench_id == BenchDB.id)
+        .join(ExamDB, AllocationDB.exam_id == ExamDB.id)
+        .join(
+            ExamRegistrationDB,
+            (ExamRegistrationDB.student_id == StudentDB.id) &
+            (ExamRegistrationDB.exam_id == AllocationDB.exam_id)
+        )
+        .filter(AllocationDB.exam_id == exam_id)
         .filter(AllocationDB.classroom_id == classroom.id)
-        .order_by(BenchDB.column, BenchDB.row)
+        .order_by(BenchDB.column, BenchDB.row, AllocationDB.seat_no)
         .all()
     )
 
-    if not allocations:
-        return {"error": "No allocation found. Run /allocate first."}
+    if not rows:
+        raise HTTPException(status_code=404, detail="No allocation found for this exam+room. Run allocation first.")
 
     export_dir = Path(__file__).resolve().parent / "exports"
     export_dir.mkdir(exist_ok=True)
 
-    file_path = export_dir / f"allocation_{room_id}.pdf"
+    file_path = export_dir / f"allocation_exam{exam_id}_{room_id}.pdf"
 
     c = canvas.Canvas(str(file_path), pagesize=A4)
     width, height = A4
 
+    exam_name = rows[0][4].exam_name  # ExamDB
+
     y = height - 50
     c.setFont("Helvetica-Bold", 14)
-    c.drawString(50, y, f"Seating Arrangement - Room {room_id}")
+    c.drawString(50, y, f"Seating Arrangement - Exam {exam_id} ({exam_name}) - Room {room_id}")
     y -= 30
 
-    c.setFont("Helvetica", 10)
-    c.drawString(50, y, "Stu ID")
-    c.drawString(110, y, "Name")
-    c.drawString(280, y, "Bench")
-    c.drawString(350, y, "Seat No")
-    c.drawString(420, y, "Column")
-    c.drawString(480, y, "Row")
-    y -= 15
-
+    # Header row
+    c.setFont("Helvetica-Bold", 9)
+    c.drawString(50,  y, "Stu ID")
+    c.drawString(95,  y, "Name")
+    c.drawString(240, y, "Sub Code")
+    c.drawString(305, y, "Bench")
+    c.drawString(355, y, "Seat")
+    c.drawString(395, y, "Col")
+    c.drawString(430, y, "Row")
+    y -= 12
     c.line(50, y, 550, y)
     y -= 15
 
-    for alloc, student, bench in allocations:
+    c.setFont("Helvetica", 9)
+
+    for alloc, student, bench, reg, exam in rows:
         if y < 60:
             c.showPage()
             y = height - 50
+            c.setFont("Helvetica-Bold", 14)
+            c.drawString(50, y, f"Seating Arrangement - Exam {exam_id} ({exam_name}) - Room {room_id}")
+            y -= 30
 
-        c.drawString(50, y, str(student.stu_id))
-        c.drawString(110, y, student.stu_name[:22])
-        c.drawString(280, y, bench.bench_id)
-        c.drawString(350, y, str(alloc.seat_no)) 
-        c.drawString(350, y, str(bench.column))
-        c.drawString(410, y, str(bench.row))
-        y -= 15
+            c.setFont("Helvetica-Bold", 9)
+            c.drawString(50,  y, "Stu ID")
+            c.drawString(95,  y, "Name")
+            c.drawString(240, y, "Sub Code")
+            c.drawString(305, y, "Bench")
+            c.drawString(355, y, "Seat")
+            c.drawString(395, y, "Col")
+            c.drawString(430, y, "Row")
+            y -= 12
+            c.line(50, y, 550, y)
+            y -= 15
+            c.setFont("Helvetica", 9)
+
+        c.drawString(50,  y, str(student.stu_id))
+        c.drawString(95,  y, student.stu_name[:23])
+        c.drawString(240, y, str(reg.subject_code))
+        c.drawString(305, y, str(bench.bench_id))
+        c.drawString(355, y, str(alloc.seat_no))
+        c.drawString(395, y, str(bench.column))
+        c.drawString(430, y, str(bench.row))
+        y -= 14
 
     c.save()
 
@@ -844,7 +886,7 @@ def allocate_multi_advanced(req: RoomsRequest, db: Session = Depends(get_db)):
     waiting = max(0, len(students) - len(slots))
 
     return {
-        "message": "Advanced multi-room allocation completed ✅",
+        "message": "Advanced multi-room allocation completed !",
         "exam_id": req.exam_id,
         "selected_rooms": req.rooms,
         "registered_students": len(students),
