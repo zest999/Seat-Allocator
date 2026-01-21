@@ -130,18 +130,31 @@ document.getElementById("btnViewAllocations").addEventListener("click", async ()
 
 /* ------------------- EXPORT ------------------- */
 document.getElementById("btnExportExcel").addEventListener("click", async () => {
+  const exam_id = Number(document.getElementById("allocExamId").value);
   const room_id = document.getElementById("exportRoomId").value.trim();
+
+  if (!exam_id) return show("allocateOut", "Enter Exam ID first (Allocation Exam ID)");
   if (!room_id) return show("allocateOut", "Enter Export Room ID");
 
-  window.open(`${API}/export/allocation/excel?room_id=${encodeURIComponent(room_id)}`, "_blank");
+  window.open(
+    `${API}/export/allocation/excel?exam_id=${encodeURIComponent(exam_id)}&room_id=${encodeURIComponent(room_id)}`,
+    "_blank"
+  );
 });
 
 document.getElementById("btnExportPdf").addEventListener("click", async () => {
+  const exam_id = Number(document.getElementById("allocExamId").value);
   const room_id = document.getElementById("exportRoomId").value.trim();
+
+  if (!exam_id) return show("allocateOut", "Enter Exam ID first (Allocation Exam ID)");
   if (!room_id) return show("allocateOut", "Enter Export Room ID");
 
-  window.open(`${API}/export/allocation/pdf?room_id=${encodeURIComponent(room_id)}`, "_blank");
+  window.open(
+    `${API}/export/allocation/pdf?exam_id=${encodeURIComponent(exam_id)}&room_id=${encodeURIComponent(room_id)}`,
+    "_blank"
+  );
 });
+
 
 function getSelectedRooms() {
   const checkboxes = document.querySelectorAll(".roomCheck:checked");

@@ -821,7 +821,7 @@ def allocate_multi_advanced(req: RoomsRequest, db: Session = Depends(get_db)):
     adj_map = build_adjacency_map(slots)
 
     # 6) Run advanced allocator
-    allocations, report = advanced_allocate(students, slots, adj_map)
+    allocations, report = advanced_allocate_v2(students, slots, adj_map)
 
     # 7) Save allocations to DB
     allocated = 0
@@ -934,61 +934,62 @@ def build_adjacency_map(slots):
     return adj
 
 
-def advanced_allocate(students, slots, adj_map):
+def advanced_allocate_v2(students, slots, adj_map):
     """
-    students: list of dicts
-      [{"student": StudentDB, "subject_code": "OS301"}, ...]
+    Advanced v2 allocator:
+    - subject buckets
+    - max-heap by remaining subject count
+    - greedy seat scoring
+    - repair/swap phase to reduce violations
 
-    returns:
-      allocations: list of dict {slot_index, student, subject_code}
-      report: violation counts
+    students: [{"student": StudentDB, "subject_code": str}, ...]
+    slots: list of seat slots
+    adj_map: slot adjacency map
     """
 
-    # Weights (you can tune these)
-    W_SAME_SUBJECT_SAME_BENCH = 1000
-    W_SAME_DEPT_SAME_BENCH    = 600
-    W_SAME_SUBJECT_ADJ        = 120
+    # ----------------- weights -----------------
+    W_SAME_SUBJECT_SAME_BENCH = 1000  # hard
+    W_SAME_DEPT_SAME_BENCH    = 600   # hard
+
+    W_SAME_SUBJECT_ADJ        = 120   # soft
     W_SAME_DEPT_ADJ           = 50
     W_SAME_SECTION_ADJ        = 20
     W_SAME_YEAR_ADJ           = 10
 
-    # Remaining students list
-    remaining = students[:]
+    # ----------------- helper structures -----------------
+    remaining_by_subject = defaultdict(list)
+    for item in students:
+        remaining_by_subject[item["subject_code"]].append(item)
 
-    # placements: slot_index -> placed student info
-    placed = {}
+    # shuffle within each bucket for natural randomness
+    for sub in remaining_by_subject:
+        random.shuffle(remaining_by_subject[sub])
 
-    # for quick check: bench_key -> list of placed infos on that bench
-    bench_placed = defaultdict(list)
+    # max heap: (-count, subject_code)
+    heap = [(-len(lst), sub) for sub, lst in remaining_by_subject.items() if lst]
+    heapq.heapify(heap)
 
-    # report counters
-    report = {
-        "viol_same_subject_same_bench": 0,
-        "viol_same_dept_same_bench": 0,
-        "viol_same_subject_adjacent": 0,
-        "viol_same_dept_adjacent": 0,
-        "viol_same_section_adjacent": 0,
-        "viol_same_year_adjacent": 0,
-    }
+    placed = {}  # slot_idx -> chosen info dict
+    bench_placed = defaultdict(list)  # bench_key -> list of infos placed on that bench
 
     def score_candidate(slot_idx, cand):
         """
         lower score = better
-        cand has keys: student, subject_code
+        cand keys: student, subject_code
         """
         slot = slots[slot_idx]
         bench_key = slot["bench_key"]
 
         score = 0
 
-        # --- Bench rule checks (hard)
+        # -------- same bench (hard-ish) --------
         for other in bench_placed[bench_key]:
             if other["subject_code"] == cand["subject_code"]:
                 score += W_SAME_SUBJECT_SAME_BENCH
             if other["student"].dept == cand["student"].dept:
                 score += W_SAME_DEPT_SAME_BENCH
 
-        # --- Adjacency checks (soft)
+        # -------- adjacency (soft) --------
         for nb_idx in adj_map.get(slot_idx, []):
             if nb_idx not in placed:
                 continue
@@ -1005,38 +1006,177 @@ def advanced_allocate(students, slots, adj_map):
 
         return score
 
-    # Greedy seat filling
-    for slot_idx in range(min(len(slots), len(remaining))):
-        # pick best candidate among remaining students
-        best_i = None
+    def pick_next_subject():
+        """
+        returns subject_code with highest remaining count
+        """
+        while heap:
+            neg_cnt, sub = heapq.heappop(heap)
+            if remaining_by_subject[sub]:
+                return sub
+        return None
+
+    # ----------------- main placement loop -----------------
+    total_to_place = min(len(slots), len(students))
+
+    for slot_idx in range(total_to_place):
+        # pick most frequent subject first
+        sub = pick_next_subject()
+
+        # if heap finished (shouldn't happen unless empty)
+        if sub is None:
+            break
+
+        # Candidate pool strategy:
+        #   - take few candidates from top subject bucket
+        #   - and also mix with few candidates from other heavy subjects
+        # This avoids "subject tunnel vision".
+        candidate_pool = []
+
+        # take up to 10 from selected subject
+        candidate_pool.extend(remaining_by_subject[sub][:10])
+
+        # additionally take some from other subjects still heavy (peek heap-like behavior)
+        # We'll just sample from remaining_by_subject keys
+        other_subjects = list(remaining_by_subject.keys())
+        random.shuffle(other_subjects)
+        for osub in other_subjects[:6]:
+            if osub != sub and remaining_by_subject[osub]:
+                candidate_pool.extend(remaining_by_subject[osub][:3])
+
+        # Fallback if pool somehow empty
+        if not candidate_pool:
+            # pick any remaining
+            for osub in remaining_by_subject:
+                if remaining_by_subject[osub]:
+                    candidate_pool.append(remaining_by_subject[osub][0])
+                    break
+
+        # Score each candidate
+        best = None
         best_score = None
 
-        # To keep it efficient, sample up to N candidates each time
-        # (for huge numbers). For small N, it checks all.
-        CANDIDATE_LIMIT = 80
-        candidate_pool = remaining if len(remaining) <= CANDIDATE_LIMIT else remaining[:CANDIDATE_LIMIT]
-
-        for i, cand in enumerate(candidate_pool):
+        for cand in candidate_pool:
             s = score_candidate(slot_idx, cand)
             if best_score is None or s < best_score:
                 best_score = s
-                best_i = i
-
-                # perfect score found
+                best = cand
                 if best_score == 0:
                     break
 
-        chosen = remaining.pop(best_i)
+        # Place best
+        chosen = best
         placed[slot_idx] = chosen
         bench_placed[slots[slot_idx]["bench_key"]].append(chosen)
 
-    # Build report by checking violations in final placement
-    # (This counts actual violations, not just penalty scores)
-    for slot_idx, info in placed.items():
+        # Remove chosen from remaining_by_subject
+        remaining_by_subject[chosen["subject_code"]].remove(chosen)
+
+        # Push updated count back to heap
+        new_cnt = len(remaining_by_subject[sub])
+        if new_cnt > 0:
+            heapq.heappush(heap, (-new_cnt, sub))
+
+    # ----------------- repair / swap pass -----------------
+    # try swaps to reduce violations
+    def compute_local_penalty(slot_idx, info):
+        """
+        penalty of putting 'info' at slot_idx based only on current placed map.
+        """
         slot = slots[slot_idx]
         bench_key = slot["bench_key"]
+        score = 0
 
-        # same bench violations
+        # same bench
+        for other in bench_placed[bench_key]:
+            if other is info:
+                continue
+            if other["subject_code"] == info["subject_code"]:
+                score += W_SAME_SUBJECT_SAME_BENCH
+            if other["student"].dept == info["student"].dept:
+                score += W_SAME_DEPT_SAME_BENCH
+
+        # adjacency
+        for nb_idx in adj_map.get(slot_idx, []):
+            if nb_idx not in placed:
+                continue
+            other = placed[nb_idx]
+            if other is info:
+                continue
+
+            if other["subject_code"] == info["subject_code"]:
+                score += W_SAME_SUBJECT_ADJ
+            if other["student"].dept == info["student"].dept:
+                score += W_SAME_DEPT_ADJ
+            if other["student"].section == info["student"].section:
+                score += W_SAME_SECTION_ADJ
+            if other["student"].year == info["student"].year:
+                score += W_SAME_YEAR_ADJ
+
+        return score
+
+    # run limited swaps (fast)
+    SWAP_TRIES = min(350, len(placed) * 2)
+
+    slot_indices = list(placed.keys())
+    for _ in range(SWAP_TRIES):
+        if len(slot_indices) < 2:
+            break
+
+        a, b = random.sample(slot_indices, 2)
+
+        info_a = placed[a]
+        info_b = placed[b]
+
+        # current penalties
+        pa1 = compute_local_penalty(a, info_a)
+        pb1 = compute_local_penalty(b, info_b)
+
+        # simulate swap by temporarily editing structures
+        # remove from bench lists
+        bench_a = slots[a]["bench_key"]
+        bench_b = slots[b]["bench_key"]
+
+        bench_placed[bench_a].remove(info_a)
+        bench_placed[bench_b].remove(info_b)
+
+        # swap placed mapping
+        placed[a], placed[b] = info_b, info_a
+
+        # add swapped into benches
+        bench_placed[bench_a].append(info_b)
+        bench_placed[bench_b].append(info_a)
+
+        # new penalties
+        pa2 = compute_local_penalty(a, placed[a])
+        pb2 = compute_local_penalty(b, placed[b])
+
+        # accept swap only if improves total
+        if (pa2 + pb2) <= (pa1 + pb1):
+            continue  # keep it
+        else:
+            # revert swap
+            bench_placed[bench_a].remove(info_b)
+            bench_placed[bench_b].remove(info_a)
+
+            placed[a], placed[b] = info_a, info_b
+
+            bench_placed[bench_a].append(info_a)
+            bench_placed[bench_b].append(info_b)
+
+    # ----------------- build report -----------------
+    report = {
+        "viol_same_subject_same_bench": 0,
+        "viol_same_dept_same_bench": 0,
+        "viol_same_subject_adjacent": 0,
+        "viol_same_dept_adjacent": 0,
+        "viol_same_section_adjacent": 0,
+        "viol_same_year_adjacent": 0,
+    }
+
+    # same bench violations
+    for slot_idx, info in placed.items():
+        bench_key = slots[slot_idx]["bench_key"]
         for other in bench_placed[bench_key]:
             if other is info:
                 continue
@@ -1045,7 +1185,6 @@ def advanced_allocate(students, slots, adj_map):
             if other["student"].dept == info["student"].dept:
                 report["viol_same_dept_same_bench"] += 1
 
-        # adjacency violations
         for nb in adj_map.get(slot_idx, []):
             if nb not in placed:
                 continue
@@ -1059,17 +1198,12 @@ def advanced_allocate(students, slots, adj_map):
             if other["student"].year == info["student"].year:
                 report["viol_same_year_adjacent"] += 1
 
-    # adjacency counts are double-counted (A-B and B-A), divide by 2
+    # divide double-counting
+    report["viol_same_subject_same_bench"] //= 2
+    report["viol_same_dept_same_bench"] //= 2
     for k in ["viol_same_subject_adjacent", "viol_same_dept_adjacent", "viol_same_section_adjacent", "viol_same_year_adjacent"]:
-        report[k] = report[k] // 2
+        report[k] //= 2
 
-    # bench counts double-counted too (seat1-seat2 and seat2-seat1)
-    report["viol_same_subject_same_bench"] = report["viol_same_subject_same_bench"] // 2
-    report["viol_same_dept_same_bench"] = report["viol_same_dept_same_bench"] // 2
-
-    allocations = []
-    for slot_idx, info in placed.items():
-        allocations.append({"slot_idx": slot_idx, **info})
-
+    allocations = [{"slot_idx": slot_idx, **info} for slot_idx, info in placed.items()]
     allocations.sort(key=lambda x: x["slot_idx"])
     return allocations, report
