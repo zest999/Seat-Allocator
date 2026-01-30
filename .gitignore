@@ -4,3 +4,4 @@ __pycache__/
 ~$*.xlsx
 backend/exports/
 students.xlsx
+students_exams.xlsx
