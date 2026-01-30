@@ -1,0 +1,28 @@
+version: "3.9"
+
+services:
+  api:
+    build: .
+    container_name: seat_allocator_api
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+    environment:
+      - DATABASE_URL=postgresql://seatuser:seatpass@db:5432/seatdb
+
+  db:
+    image: postgres:15
+    container_name: seat_allocator_db
+    restart: always
+    environment:
+      POSTGRES_DB: seatdb
+      POSTGRES_USER: seatuser
+      POSTGRES_PASSWORD: seatpass
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:

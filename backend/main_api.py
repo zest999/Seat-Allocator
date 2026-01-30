@@ -62,7 +62,7 @@ def get_students(db: Session = Depends(get_db)):
 
 @app.post("/students/import")
 def import_students(db: Session = Depends(get_db)):
-    file_path = Path(__file__).resolve().parent.parent / "students.xlsx"
+    file_path = Path(__file__).resolve().parent / "students.xlsx"
 
     if not file_path.exists():
         return {"error": f"students.xlsx not found at {file_path}"}
@@ -125,7 +125,7 @@ def import_exam_registrations(exam_id: int, db: Session = Depends(get_db)):
     if not exam:
         raise HTTPException(status_code=404, detail="Exam not found")
 
-    file_path = Path(__file__).resolve().parent.parent / "students_exams.xlsx"
+    file_path = Path(__file__).resolve().parent / "students_exams.xlsx"
 
     if not file_path.exists():
         return {"error": f"students_exams.xlsx not found at {file_path}"}
