@@ -1,0 +1,10 @@
+applications:
+  - name: seat-allocator-api
+    memory: 512M
+    disk_quota: 2G
+    buildpacks:
+      - python_buildpack
+    command: uvicorn main_api:app --host 0.0.0.0 --port $PORT
+    env:
+      DATABASE_URL: hana+hdbcli://DBADMIN:Baveshking2005%40@8b628b1e-65ac-4a57-a5c8-acd0ce20803f.hana.prod-ap21.hanacloud.ondemand.com:443/?encrypt=true&sslValidateCertificate=false
+

@@ -31,8 +31,8 @@ class BenchDB(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     bench_id = Column(String, index=True, nullable=False)  
-    row = Column(Integer, nullable=False)
-    column = Column(Integer, nullable=False)
+    row_no = Column(Integer, nullable=False)
+    col_no = Column(Integer, nullable=False)
 
     classroom_id = Column(Integer, ForeignKey("classrooms.id"), nullable=False)
     classroom = relationship("ClassroomDB", back_populates="benches")

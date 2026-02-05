@@ -7,3 +7,8 @@ reportlab
 python-multipart
 python-dotenv
 psycopg2-binary
+hdbcli
+sqlalchemy-hana
+
+
+

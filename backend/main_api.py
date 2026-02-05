@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, Body, HTTPException, Query
+from fastapi import FastAPI, Depends, Body, HTTPException, Query, UploadFile, File
 from sqlalchemy.orm import Session
 from database import Base, engine, SessionLocal
 from db_models import StudentDB, ClassroomDB, BenchDB, AllocationDB, ExamDB, ExamRegistrationDB
@@ -61,18 +61,16 @@ def get_students(db: Session = Depends(get_db)):
 
 
 @app.post("/students/import")
-def import_students(db: Session = Depends(get_db)):
-    file_path = Path(__file__).resolve().parent / "students.xlsx"
-
-    if not file_path.exists():
-        return {"error": f"students.xlsx not found at {file_path}"}
-
-    df = pd.read_excel(file_path)
+def import_students(file: UploadFile = File(...), db: Session = Depends(get_db)):
+    try:
+        df = pd.read_excel(file.file)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Excel read failed: {str(e)}")
 
     required_cols = ["stu_id", "stu_name", "year", "dept", "section"]
     missing = [c for c in required_cols if c not in df.columns]
     if missing:
-        return {"error": f"Missing columns in Excel: {missing}"}
+        raise HTTPException(status_code=400, detail=f"Missing columns in Excel: {missing}")
 
     inserted = 0
     updated = 0
@@ -83,12 +81,8 @@ def import_students(db: Session = Depends(get_db)):
         year = int(row["year"])
         dept = str(row["dept"]).strip().upper()
         section = str(row["section"]).strip().upper()
+        phone = str(row["phone"]).strip() if "phone" in df.columns and not pd.isna(row["phone"]) else None
 
-        phone = None
-        if "phone" in df.columns and not pd.isna(row["phone"]):
-            phone = str(row["phone"]).strip()
-
-        # upsert logic (update if exists, else insert)
         existing = db.query(StudentDB).filter(StudentDB.stu_id == stu_id).first()
 
         if existing:
@@ -112,26 +106,25 @@ def import_students(db: Session = Depends(get_db)):
     db.commit()
 
     return {
-        "message": "Student import completed !",
+        "message": "Student import completed!",
         "inserted": inserted,
         "updated": updated,
         "total_rows": len(df)
     }
 
-@app.post("/exams/{exam_id}/registrations/import-excel")
-def import_exam_registrations(exam_id: int, db: Session = Depends(get_db)):
 
+@app.post("/exams/{exam_id}/registrations/import-excel")
+def import_exam_registrations(
+    exam_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db)
+):
     exam = db.query(ExamDB).filter(ExamDB.id == exam_id).first()
     if not exam:
         raise HTTPException(status_code=404, detail="Exam not found")
 
-    file_path = Path(__file__).resolve().parent / "students_exams.xlsx"
-
-    if not file_path.exists():
-        return {"error": f"students_exams.xlsx not found at {file_path}"}
-
     try:
-        df = pd.read_excel(file_path)
+        df = pd.read_excel(file.file)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Excel read failed: {str(e)}")
 
@@ -140,11 +133,11 @@ def import_exam_registrations(exam_id: int, db: Session = Depends(get_db)):
         missing = required_cols - set(df.columns)
         raise HTTPException(status_code=400, detail=f"Missing columns: {missing}")
 
-    inserted = 0
-    skipped_missing_student = 0
-
     db.query(ExamRegistrationDB).filter(ExamRegistrationDB.exam_id == exam_id).delete()
     db.commit()
+
+    inserted = 0
+    skipped_missing_student = 0
 
     for _, row in df.iterrows():
         stu_id = int(row["stu_id"])
@@ -155,19 +148,17 @@ def import_exam_registrations(exam_id: int, db: Session = Depends(get_db)):
             skipped_missing_student += 1
             continue
 
-        reg = ExamRegistrationDB(
+        db.add(ExamRegistrationDB(
             exam_id=exam_id,
             student_id=student.id,
             subject_code=subject_code
-        )
-
-        db.add(reg)
+        ))
         inserted += 1
 
     db.commit()
 
     return {
-        "message": "Exam registration import completed !",
+        "message": "Exam registrations imported!",
         "exam_id": exam_id,
         "inserted": inserted,
         "skipped_missing_student": skipped_missing_student,
@@ -240,8 +231,8 @@ def create_classroom(
     for b in benches:
         db_bench = BenchDB(
             bench_id=b.bench_id,
-            row=b.row,
-            column=b.column,
+            row_no=b.row,
+            col_no=b.column,
             classroom_id=classroom.id
         )
         db.add(db_bench)
@@ -281,7 +272,7 @@ def get_benches(room_id: str, db: Session = Depends(get_db)):
         "room_id": room_id,
         "total_benches": len(benches),
         "benches": [
-            {"bench_id": b.bench_id, "row": b.row, "column": b.column}
+            {"bench_id": b.bench_id, "row": b.row_no, "column": b.col_no}
             for b in benches
         ]
     }
@@ -340,7 +331,7 @@ def allocate_students_to_room(req: AllocateRequest, db: Session = Depends(get_db
     benches = (
         db.query(BenchDB)
         .filter(BenchDB.classroom_id == classroom.id)
-        .order_by(BenchDB.column, BenchDB.row)
+        .order_by(BenchDB.col_no, BenchDB.row_no)
         .all()
     )
 
@@ -426,8 +417,8 @@ def public_seat_lookup(
         "room_id": classroom.room_id,
         "bench_id": bench.bench_id,
         "seat_no": alloc.seat_no,
-        "row": bench.row,
-        "column": bench.column
+        "row": bench.row_no,
+        "column": bench.col_no
     }
 
  
@@ -459,8 +450,8 @@ def export_allocation_excel(
     if not rows:
         raise HTTPException(status_code=404, detail="No allocation found for this exam+room. Run allocation first.")
 
-    export_dir = Path(__file__).resolve().parent / "exports"
-    export_dir.mkdir(exist_ok=True)
+    export_dir = Path("/tmp/exports")
+    export_dir.mkdir(parents=True, exist_ok=True)
 
     file_path = export_dir / f"allocation_exam{exam_id}_{room_id}.xlsx"
 
@@ -478,8 +469,8 @@ def export_allocation_excel(
             "room_id": room_id,
             "bench_id": bench.bench_id,
             "seat_no": alloc.seat_no,
-            "column": bench.column,
-            "row": bench.row
+            "column": bench.col_no,
+            "row": bench.row_no
         })
 
     df = pd.DataFrame(data)
@@ -514,15 +505,15 @@ def export_allocation_pdf(
         )
         .filter(AllocationDB.exam_id == exam_id)
         .filter(AllocationDB.classroom_id == classroom.id)
-        .order_by(BenchDB.column, BenchDB.row, AllocationDB.seat_no)
+        .order_by(BenchDB.col_no, BenchDB.row_no, AllocationDB.seat_no)  
         .all()
     )
 
     if not rows:
         raise HTTPException(status_code=404, detail="No allocation found for this exam+room. Run allocation first.")
 
-    export_dir = Path(__file__).resolve().parent / "exports"
-    export_dir.mkdir(exist_ok=True)
+    export_dir = Path("/tmp/exports")
+    export_dir.mkdir(parents=True, exist_ok=True)
 
     file_path = export_dir / f"allocation_exam{exam_id}_{room_id}.pdf"
 
@@ -577,8 +568,8 @@ def export_allocation_pdf(
         c.drawString(240, y, str(reg.subject_code))
         c.drawString(305, y, str(bench.bench_id))
         c.drawString(355, y, str(alloc.seat_no))
-        c.drawString(395, y, str(bench.column))
-        c.drawString(430, y, str(bench.row))
+        c.drawString(395, y, str(bench.col_no))  
+        c.drawString(430, y, str(bench.row_no))  
         y -= 14
 
     c.save()
@@ -588,6 +579,7 @@ def export_allocation_pdf(
         filename=file_path.name,
         media_type="application/pdf"
     )
+
 
 
 class ExamCreateRequest(BaseModel):
@@ -649,64 +641,6 @@ def register_students_by_year(exam_id: int, req: RegisterYearRequest, db: Sessio
         "registered_students": len(students)
     }
 
-
-@app.post("/exams/{exam_id}/registrations/import-excel")
-def import_exam_registrations(exam_id: int, db: Session = Depends(get_db)):
-    
-    exam = db.query(ExamDB).filter(ExamDB.id == exam_id).first()
-    if not exam:
-        raise HTTPException(status_code=404, detail="Exam not found")
-
-    file_path = Path(__file__).resolve().parent.parent / "students_exams.xlsx"
-
-    if not file_path.exists():
-        return {"error": f"students_exams.xlsx not found at {file_path}"}
-
-    try:
-        df = pd.read_excel(file_path)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Excel read failed: {str(e)}")
-
-    required_cols = {"stu_id", "subject_code"}
-    if not required_cols.issubset(df.columns):
-        missing = required_cols - set(df.columns)
-        raise HTTPException(status_code=400, detail=f"Missing columns: {missing}")
-
-    # Clear old registrations for this exam
-    db.query(ExamRegistrationDB).filter(ExamRegistrationDB.exam_id == exam_id).delete()
-    db.commit()
-
-    inserted = 0
-    skipped_missing_student = 0
-
-    for _, row in df.iterrows():
-        stu_id = int(row["stu_id"])
-        subject_code = str(row["subject_code"]).strip().upper()
-
-        student = db.query(StudentDB).filter(StudentDB.stu_id == stu_id).first()
-        if not student:
-            skipped_missing_student += 1
-            continue
-
-        db.add(
-            ExamRegistrationDB(
-                exam_id=exam_id,
-                student_id=student.id,
-                subject_code=subject_code,
-            )
-        )
-        inserted += 1
-
-    db.commit()
-
-    return {
-        "message": "Exam registrations imported !",
-        "exam_id": exam_id,
-        "inserted": inserted,
-        "skipped_missing_student": skipped_missing_student,
-        "total_rows": len(df),
-    }
-
 @app.get("/exams/{exam_id}/allocations")
 def get_allocations(exam_id: int, room_id: str | None = None, db: Session = Depends(get_db)):
     q = (
@@ -729,8 +663,8 @@ def get_allocations(exam_id: int, room_id: str | None = None, db: Session = Depe
             "room_id": classroom.room_id,
             "bench_id": bench.bench_id,
             "seat_no": alloc.seat_no,
-            "column": bench.column,
-            "row": bench.row
+            "column": bench.col_no,
+            "row": bench.row_no
         }
         for alloc, student, bench, classroom in rows
     ]
@@ -883,8 +817,8 @@ def build_seat_slots(db: Session, classrooms_ordered):
                     "bench_id": bench.id,
                     "bench_key": (c.room_id, bench.column, bench.row),
                     "seat_no": seat_no,
-                    "col": bench.column,
-                    "row": bench.row,
+                    "col": bench.col_no,
+                    "row": bench.row_no,
                 })
 
     return slots
