@@ -20,7 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title = "Seat Allocator API")
 
-Base.metadata.create_all(bind = engine)
+# Base.metadata.create_all(bind = engine)
 
 app.add_middleware(
     CORSMiddleware,
@@ -815,7 +815,7 @@ def build_seat_slots(db: Session, classrooms_ordered):
                     "classroom_id": c.id,
                     "room_id": c.room_id,
                     "bench_id": bench.id,
-                    "bench_key": (c.room_id, bench.column, bench.row),
+                    "bench_key": (c.room_id, bench.col_no, bench.row_no),
                     "seat_no": seat_no,
                     "col": bench.col_no,
                     "row": bench.row_no,
