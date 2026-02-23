@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: seat-allocator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: seat-allocator
+  template:
+    metadata:
+      labels:
+        app: seat-allocator
+    spec:
+      containers:
+        - name: seat-allocator
+          image: bavesha/seat-allocator:latest
+          ports:
+            - containerPort: 8000
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: hana-db-secret
+                  key: DATABASE_URL

@@ -1,0 +1,23 @@
+apiVersion: networking.istio.io/v1beta1
+kind: ServiceEntry
+metadata:
+  name: hana-cloud-egress
+spec:
+  hosts:
+    - 8b628b1e-65ac-4a57-a5c8-acd0ce20803f.hana.prod-ap21.hanacloud.ondemand.com
+  location: MESH_EXTERNAL
+  ports:
+    - number: 443
+      name: tls
+      protocol: TLS
+  resolution: DNS
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: hana-cloud-destination
+spec:
+  host: 8b628b1e-65ac-4a57-a5c8-acd0ce20803f.hana.prod-ap21.hanacloud.ondemand.com
+  trafficPolicy:
+    tls:
+      mode: DISABLE
